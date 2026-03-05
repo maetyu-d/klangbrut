@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BlockMusicToy VERSION 0.1.0 LANGUAGES C CXX)
+project(KlangBrut VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,12 +37,12 @@ else()
     endif()
 endif()
 
-juce_add_gui_app(BlockMusicToy
-    PRODUCT_NAME "Block Music Toy"
+juce_add_gui_app(KlangBrut
+    PRODUCT_NAME "KlangBrut"
 )
-juce_generate_juce_header(BlockMusicToy)
+juce_generate_juce_header(KlangBrut)
 
-target_sources(BlockMusicToy
+target_sources(KlangBrut
     PRIVATE
         Source/Main.cpp
         Source/MainComponent.h
@@ -53,13 +53,13 @@ target_sources(BlockMusicToy
         Source/SynthEngine.cpp
 )
 
-target_compile_definitions(BlockMusicToy
+target_compile_definitions(KlangBrut
     PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
 )
 
-target_link_libraries(BlockMusicToy
+target_link_libraries(KlangBrut
     PRIVATE
         juce::juce_gui_extra
         juce::juce_opengl

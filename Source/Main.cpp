@@ -1,10 +1,10 @@
 #include <JuceHeader.h>
 #include "MainComponent.h"
 
-class BlockMusicApplication final : public juce::JUCEApplication
+class KlangBrutApplication final : public juce::JUCEApplication
 {
 public:
-    const juce::String getApplicationName() override    { return "Block Music Toy"; }
+    const juce::String getApplicationName() override    { return "KlangBrut"; }
     const juce::String getApplicationVersion() override { return "0.1.0"; }
     bool moreThanOneInstanceAllowed() override          { return true; }
 
@@ -57,4 +57,4 @@ private:
     std::unique_ptr<MainWindow> mainWindow;
 };
 
-START_JUCE_APPLICATION (BlockMusicApplication)
+START_JUCE_APPLICATION (KlangBrutApplication)

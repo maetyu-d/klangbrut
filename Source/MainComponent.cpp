@@ -975,7 +975,7 @@ void MainComponent::drawHud (juce::Graphics& g) const
     const auto yCol = neonLerp (juce::Colour::fromRGB (80, 200, 255), juce::Colour::fromRGB (255, 90, 170), (float) camera.y / (float) world.gridY);
     g.setColour (yCol);
     g.setFont (juce::Font (16.0f, juce::Font::bold));
-    g.drawText ("Block Music Toy // Rez x Minecraft // Height = pitch root", 16, getHeight() - 130, getWidth() - 24, 26, juce::Justification::left);
+    g.drawText ("KlangBrut // Rez x Minecraft // Height = pitch root", 16, getHeight() - 130, getWidth() - 24, 26, juce::Justification::left);
 
     g.setColour (juce::Colours::white.withAlpha (0.92f));
     g.setFont (juce::Font (14.0f));
