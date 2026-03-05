@@ -134,13 +134,23 @@ void World::generateDemoLevel()
     endpoints.add ({ { 17, 9, 17 }, { 0, 7, 12, 19 } });
     endpoints.add ({ { 2, 9, 2 }, { 0, 5, 9 } });
 
-    // Built-in 3D routes for movers.
-    routes.add ({ { 3, 2, 3 }, { 7, 4, 7 } });
-    routes.add ({ { 7, 4, 7 }, { 10, 7, 10 } });
-    routes.add ({ { 10, 7, 10 }, { 14, 4, 14 } });
-    routes.add ({ { 14, 4, 14 }, { 17, 9, 17 } });
-    routes.add ({ { 13, 2, 4 }, { 10, 5, 10 } });
-    routes.add ({ { 2, 9, 2 }, { 10, 7, 10 } });
+    // Built-in routes are orthogonal only (one axis per segment).
+    auto addOrthRouteChain = [this] (juce::Vector3D<int> a, juce::Vector3D<int> b)
+    {
+        const juce::Vector3D<int> p1 { b.x, a.y, a.z };
+        const juce::Vector3D<int> p2 { b.x, a.y, b.z };
+
+        if (! sameCell (a, p1)) routes.add ({ a, p1 });
+        if (! sameCell (p1, p2)) routes.add ({ p1, p2 });
+        if (! sameCell (p2, b)) routes.add ({ p2, b });
+    };
+
+    addOrthRouteChain ({ 3, 2, 3 }, { 7, 4, 7 });
+    addOrthRouteChain ({ 7, 4, 7 }, { 10, 7, 10 });
+    addOrthRouteChain ({ 10, 7, 10 }, { 14, 4, 14 });
+    addOrthRouteChain ({ 14, 4, 14 }, { 17, 9, 17 });
+    addOrthRouteChain ({ 13, 2, 4 }, { 10, 5, 10 });
+    addOrthRouteChain ({ 2, 9, 2 }, { 10, 7, 10 });
 
     rebuildEndpointIndex();
 
@@ -298,6 +308,12 @@ bool World::commitRoute (juce::Vector3D<int> end)
         return false;
 
     if (sameCell (pendingRouteStart, end))
+        return false;
+
+    const int changedAxes = (pendingRouteStart.x != end.x ? 1 : 0)
+                          + (pendingRouteStart.y != end.y ? 1 : 0)
+                          + (pendingRouteStart.z != end.z ? 1 : 0);
+    if (changedAxes != 1)
         return false;
 
     routes.add ({ pendingRouteStart, end });

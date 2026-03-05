@@ -394,10 +394,13 @@ void MainComponent::timerCallback()
             performanceBeatStep (delayMs);
             nextBeatTimeMs += beatIntervalMs;
         }
-        for (const auto& trig : world.consumeTriggers())
+        const auto triggers = world.consumeTriggers();
+        const int triggerLimit = juce::jmin (3, triggers.size());
+        for (int i = 0; i < triggerLimit; ++i)
         {
+            const auto& trig = triggers.getReference (i);
             juce::ignoreUnused (trig.position);
-            synth.triggerChord (trig.chord, 0.52f, 54);
+            synth.triggerImprovisedHarmony (trig.chord, 0.40f, 120);
         }
     }
 
@@ -909,7 +912,7 @@ void MainComponent::drawHud (juce::Graphics& g) const
     g.setFont (juce::Font (14.0f));
     g.drawText ("Movement: WASD only | Look: mouse move/drag", 16, getHeight() - 112, getWidth() - 24, 20, juce::Justification::left);
     g.drawText ("Placement: N note mode, C chord mode, B place | Chord picker: Up/Down + Enter (opens after chord place)", 16, getHeight() - 92, getWidth() - 24, 20, juce::Justification::left);
-    g.drawText ("Modes: M toggles Build/Performance | Performance runs lines + movers in beat-synced playback", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
+    g.drawText ("Modes: M toggles Build/Performance", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
 
     if (mode == Mode::performance)
     {
