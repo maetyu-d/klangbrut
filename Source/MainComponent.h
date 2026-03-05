@@ -52,6 +52,7 @@ private:
     void closeChordMenu();
     void resetPerformanceState();
     void schedulePerformanceBeatAudio (int sampleOffset);
+    const char* beatStyleName (int style) const;
 
     World world;
     SynthEngine synth;
@@ -98,6 +99,7 @@ private:
     std::atomic<int> pendingWorldBeatSteps { 0 };
     std::atomic<int> pendingBarPulseSteps { 0 };
     int beatCount = 0;
+    int beatStyle = 1; // 0=Off, 1..4 KlangKunst patterns
     float beatFlash = 0.0f;
     float barFlash = 0.0f;
     bool performanceViewLatched = false;

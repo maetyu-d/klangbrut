@@ -227,6 +227,8 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         if (mode == Mode::build)
         {
             mode = Mode::performance;
+            if (beatStyle == 0)
+                beatStyle = 1;
             closeChordMenu();
             setChordPlacementMode (false);
             resetPerformanceState();
@@ -259,6 +261,12 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     if (key.getTextCharacter() == 't')
     {
         synth.cycleModel();
+        return true;
+    }
+
+    if (key.getTextCharacter() == 'v')
+    {
+        beatStyle = (beatStyle + 1) % 5;
         return true;
     }
 
@@ -584,32 +592,87 @@ void MainComponent::schedulePerformanceBeatAudio (int sampleOffset)
     const bool isBarDownbeat = (beatInBar == 0);
     const bool isPreBarBeat = (beatInBar == 3);
 
-    // Drum bed only here; melodic content is mover/line-triggered.
-    synth.triggerChordDelayedSamples ({ 32 }, sampleOffset, isBarDownbeat ? 1.0f : 0.92f, juce::roundToInt (audioSampleRate * (isBarDownbeat ? 0.110 : 0.092)));
-    synth.sidechainPulseDelayedSamples (sampleOffset, isBarDownbeat ? 1.0f : 0.84f);
-    synth.triggerChordDelayedSamples ({ 37 }, sampleOffset + quarterBeatSamples, 0.25f, juce::roundToInt (audioSampleRate * 0.044));
-    synth.triggerChordDelayedSamples ({ 50 }, sampleOffset + halfBeatSamples, 0.22f, juce::roundToInt (audioSampleRate * 0.022));
-    synth.triggerChordDelayedSamples ({ 52 }, sampleOffset + threeQuarterBeatSamples, 0.16f, juce::roundToInt (audioSampleRate * 0.018));
-
-    if (beatInBar == 1 || beatInBar == 3)
-        synth.triggerChordDelayedSamples ({ 48 }, sampleOffset + halfBeatSamples, 0.30f, juce::roundToInt (audioSampleRate * 0.036));
-
-    if (isBarDownbeat)
+    auto beatAtStep = [] (int beat) { return beat * 4; };
+    auto emitBeatHit = [this] (int drumVoice, float velocity, int offsetSamples)
     {
-        // Strong bar marker.
-        synth.triggerChordDelayedSamples ({ 27 }, sampleOffset, 0.88f, juce::roundToInt (audioSampleRate * 0.160));
-        synth.sidechainPulseDelayedSamples (sampleOffset, 0.7f);
-        synth.triggerChordDelayedSamples ({ 45 }, sampleOffset + halfBeatSamples, 0.14f, juce::roundToInt (audioSampleRate * 0.024));
-    }
+        const float vel = juce::jlimit (0.0f, 1.0f, velocity * 1.22f);
+        switch (drumVoice)
+        {
+            case 120: // kick
+                synth.triggerChordDelayedSamples ({ 34, 46 }, offsetSamples, juce::jmin (1.0f, vel + 0.04f), juce::roundToInt (audioSampleRate * 0.165));
+                // Keep some groove pumping, but avoid ducking the beat into inaudibility.
+                synth.sidechainPulseDelayedSamples (offsetSamples, juce::jlimit (0.0f, 1.0f, 0.22f * vel));
+                break;
+            case 121: // snare/clap
+                synth.triggerChordDelayedSamples ({ 66, 78 }, offsetSamples, juce::jmin (1.0f, vel + 0.05f), juce::roundToInt (audioSampleRate * 0.085));
+                break;
+            case 122: // hat
+                synth.triggerChordDelayedSamples ({ 92 }, offsetSamples, vel, juce::roundToInt (audioSampleRate * 0.018));
+                break;
+            case 123: // accent
+                synth.triggerChordDelayedSamples ({ 82, 94 }, offsetSamples, juce::jmin (1.0f, vel + 0.06f), juce::roundToInt (audioSampleRate * 0.056));
+                break;
+            default:
+                break;
+        }
+    };
 
-    if (isPreBarBeat)
-        synth.triggerChordDelayedSamples ({ 47 }, sampleOffset + halfBeatSamples, 0.14f, juce::roundToInt (audioSampleRate * 0.018));
+    if (beatStyle > 0)
+    {
+        for (int sub = 0; sub < 4; ++sub)
+        {
+            const int step = ((audioBeatCounter - 1) * 4 + sub) % 16;
+            const int stepOffset = sampleOffset + sub * quarterBeatSamples;
+
+            switch (beatStyle)
+            {
+                case 1:
+                    if ((step % 4) == 0) emitBeatHit (120, 0.82f, stepOffset);
+                    if (step == beatAtStep (1) || step == beatAtStep (3)) emitBeatHit (121, 0.60f, stepOffset);
+                    if ((step % 2) == 1) emitBeatHit (122, 0.18f + ((step % 4) == 3 ? 0.05f : 0.0f), stepOffset);
+                    break;
+                case 2:
+                    if (step == 0 || step == beatAtStep (2) || step == beatAtStep (3)) emitBeatHit (120, 0.78f, stepOffset);
+                    if (step == beatAtStep (1) || step == beatAtStep (3)) emitBeatHit (121, 0.58f, stepOffset);
+                    if ((step % 2) == 1) emitBeatHit (122, 0.17f, stepOffset);
+                    if (step == 15) emitBeatHit (123, 0.18f, stepOffset);
+                    break;
+                case 3:
+                    if (step == 0 || step == 8 || step == 14) emitBeatHit (120, 0.76f, stepOffset);
+                    if (step == beatAtStep (1) || step == beatAtStep (3)) emitBeatHit (121, 0.56f, stepOffset);
+                    if ((step % 2) == 1) emitBeatHit (122, 0.16f + ((step == 11 || step == 15) ? 0.05f : 0.0f), stepOffset);
+                    break;
+                case 4:
+                    if ((step % 4) == 0) emitBeatHit (120, 0.72f, stepOffset);
+                    if (step == beatAtStep (1) || step == beatAtStep (3)) emitBeatHit (121, 0.52f, stepOffset);
+                    if ((step % 2) == 1) emitBeatHit (122, 0.15f, stepOffset);
+                    if (step == beatAtStep (2) || step == 15) emitBeatHit (123, 0.16f, stepOffset);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
 
     pendingWorldBeatSteps.fetch_add (1);
     if (isBarDownbeat)
         pendingBarPulseSteps.fetch_add (1);
 
     // Melodic content comes from mover collisions/endpoints only.
+}
+
+const char* MainComponent::beatStyleName (int style) const
+{
+    switch (style)
+    {
+        case 0: return "Off";
+        case 1: return "909 Rez Straight";
+        case 2: return "909 Tight Pulse";
+        case 3: return "909 Forward Step";
+        case 4: return "909 Rail Line";
+        default: break;
+    }
+    return "Off";
 }
 
 void MainComponent::updateChordMenuPosition()
@@ -981,7 +1044,7 @@ void MainComponent::drawHud (juce::Graphics& g) const
     g.setFont (juce::Font (14.0f));
     g.drawText ("Movement: WASD only | Look: mouse move/drag", 16, getHeight() - 112, getWidth() - 24, 20, juce::Justification::left);
     g.drawText ("Placement: N note mode, C chord mode, B place | Chord picker: Up/Down + Enter (opens after chord place)", 16, getHeight() - 92, getWidth() - 24, 20, juce::Justification::left);
-    g.drawText ("Modes: M toggles Build/Performance | Synth: T cycles (" + synth.getModelName() + ")", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
+    g.drawText ("Modes: M Build/Performance | Synth: T (" + synth.getModelName() + ") | Beat: V (" + juce::String (beatStyleName (beatStyle)) + ")", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
 
     if (mode == Mode::performance)
     {

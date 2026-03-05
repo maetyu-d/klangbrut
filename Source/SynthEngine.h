@@ -106,7 +106,7 @@ private:
     int64 timeline = 0;
     double sr = 44100.0;
     float sidechainEnv = 0.0f;
-    float sidechainAmount = 0.85f;
+    float sidechainAmount = 0.52f;
     float sidechainReleaseMs = 220.0f;
     float outputGain = 0.62f;
     int improvCounter = 0;
