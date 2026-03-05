@@ -1,9 +1,9 @@
-# Block Music Toy
+# KlangBrut
 
-C++/JUCE prototype: part instrument, part toy, part 3D architectural music sandbox.
+C++/JUCE prototype: part instrument, part toy, part Brutalist-ish architectural sandbox.
 
 ## Concept
-- Minecraft-like voxel structure in a neon psychedelic style.
+- Minecraft-like voxel structure in a colourful/vibrant style.
 - Fly in full 3D (horizontal + vertical).
 - Place endpoints and draw 3D routes.
 - Spawn moving note/chord entities on routes.
