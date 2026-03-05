@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <optional>
 
@@ -134,12 +135,42 @@ MainComponent::~MainComponent()
 
 void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
 {
+    audioSampleRate = sampleRate;
     synth.prepare (sampleRate, samplesPerBlockExpected, 2);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
 {
     bufferToFill.clearActiveBufferRegion();
+
+    if (mode == Mode::performance && performanceBpm > 0.0 && audioSampleRate > 1000.0)
+    {
+        const double beatSamples = audioSampleRate * 60.0 / performanceBpm;
+        double localPhase = audioBeatPhaseSamples;
+        double processed = 0.0;
+        const double total = (double) bufferToFill.numSamples;
+
+        while (processed < total)
+        {
+            const double samplesUntilBeat = beatSamples - localPhase;
+            const double remaining = total - processed;
+            if (samplesUntilBeat > remaining)
+            {
+                localPhase += remaining;
+                processed = total;
+                break;
+            }
+
+            const int sampleOffset = juce::jlimit (0, bufferToFill.numSamples - 1,
+                                                   (int) std::floor (processed + samplesUntilBeat));
+            schedulePerformanceBeatAudio (sampleOffset);
+            processed += samplesUntilBeat;
+            localPhase = 0.0;
+        }
+
+        audioBeatPhaseSamples = std::fmod (localPhase, beatSamples);
+    }
+
     synth.render (*bufferToFill.buffer, bufferToFill.startSample, bufferToFill.numSamples);
 }
 
@@ -199,12 +230,20 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
             closeChordMenu();
             setChordPlacementMode (false);
             resetPerformanceState();
+            performanceViewLatched = false;
         }
         else
         {
             mode = Mode::build;
             closeChordMenu();
             setChordPlacementMode (false);
+            if (performanceViewLatched)
+            {
+                camera = buildCameraBackup;
+                yaw = buildYawBackup;
+                pitch = buildPitchBackup;
+                performanceViewLatched = false;
+            }
         }
         return true;
     }
@@ -214,6 +253,12 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         world.generateDemoLevel();
         if (mode == Mode::performance)
             resetPerformanceState();
+        return true;
+    }
+
+    if (key.getTextCharacter() == 't')
+    {
+        synth.cycleModel();
         return true;
     }
 
@@ -373,6 +418,22 @@ void MainComponent::timerCallback()
     const auto dt = (float) ((now - lastTickMs) * 0.001);
     lastTickMs = now;
 
+    if (mode == Mode::performance)
+    {
+        if (! performanceViewLatched)
+        {
+            buildCameraBackup = camera;
+            buildYawBackup = yaw;
+            buildPitchBackup = pitch;
+            performanceViewLatched = true;
+        }
+
+        // Stable top-down performance camera.
+        camera = { (float) world.gridX * 0.5f, (float) world.gridY + 12.0f, (float) world.gridZ * 0.5f };
+        yaw = 0.0f;
+        pitch = juce::MathConstants<float>::halfPi - 0.035f;
+    }
+
     updateMovement (dt);
     if (mode == Mode::build)
     {
@@ -384,16 +445,18 @@ void MainComponent::timerCallback()
     {
         beatFlash *= std::exp (-dt * 9.0f);
         barFlash *= std::exp (-dt * 3.8f);
-        const double beatIntervalMs = 60000.0 / performanceBpm;
-        if (nextBeatTimeMs <= 0.0)
-            nextBeatTimeMs = now;
-
-        while (now + beatLookaheadMs >= nextBeatTimeMs)
+        const int dueBeats = pendingWorldBeatSteps.exchange (0);
+        const int dueBars = pendingBarPulseSteps.exchange (0);
+        for (int i = 0; i < dueBeats; ++i)
         {
-            const int delayMs = juce::jmax (0, juce::roundToInt (nextBeatTimeMs - now));
-            performanceBeatStep (delayMs);
-            nextBeatTimeMs += beatIntervalMs;
+            world.stepMoversOnBeat();
+            ++beatCount;
+            beatFlash = 1.0f;
         }
+
+        if (dueBars > 0)
+            barFlash = 1.0f;
+
         const auto triggers = world.consumeTriggers();
         const int triggerLimit = juce::jmin (3, triggers.size());
         for (int i = 0; i < triggerLimit; ++i)
@@ -442,6 +505,9 @@ juce::Vector3D<float> MainComponent::cameraForward() const
 
 void MainComponent::applyMouseLook (juce::Point<float> currentMousePos)
 {
+    if (mode == Mode::performance)
+        return;
+
     if (firstMouseSample)
     {
         firstMouseSample = false;
@@ -497,48 +563,51 @@ bool MainComponent::sameCell (juce::Vector3D<int> a, juce::Vector3D<int> b) cons
 
 void MainComponent::resetPerformanceState()
 {
-    nextBeatTimeMs = juce::Time::getMillisecondCounterHiRes();
+    audioBeatPhaseSamples = 0.0;
+    audioBeatCounter = 0;
+    pendingWorldBeatSteps.store (0);
+    pendingBarPulseSteps.store (0);
     beatCount = 0;
     beatFlash = 0.0f;
     barFlash = 0.0f;
 }
 
-void MainComponent::performanceBeatStep (int baseDelayMs)
+void MainComponent::schedulePerformanceBeatAudio (int sampleOffset)
 {
-    ++beatCount;
-    world.stepMoversOnBeat();
+    ++audioBeatCounter;
 
-    const int beatMs = juce::roundToInt (60000.0 / performanceBpm);
-    const int halfBeatMs = juce::jmax (1, beatMs / 2);
-    const int quarterBeatMs = juce::jmax (1, beatMs / 4);
-    const int threeQuarterBeatMs = juce::jmax (1, (beatMs * 3) / 4);
-    const int beatInBar = (beatCount - 1) % 4;
+    const int beatSamples = juce::jmax (1, juce::roundToInt (audioSampleRate * 60.0 / performanceBpm));
+    const int halfBeatSamples = juce::jmax (1, beatSamples / 2);
+    const int quarterBeatSamples = juce::jmax (1, beatSamples / 4);
+    const int threeQuarterBeatSamples = juce::jmax (1, (beatSamples * 3) / 4);
+    const int beatInBar = (audioBeatCounter - 1) % 4;
     const bool isBarDownbeat = (beatInBar == 0);
     const bool isPreBarBeat = (beatInBar == 3);
-    beatFlash = 1.0f;
-    if (isBarDownbeat)
-        barFlash = 1.0f;
 
     // Drum bed only here; melodic content is mover/line-triggered.
-    synth.triggerChordDelayed ({ 32 }, baseDelayMs, isBarDownbeat ? 1.0f : 0.92f, isBarDownbeat ? 110 : 92); // kick
-    synth.sidechainPulseDelayed (baseDelayMs, isBarDownbeat ? 1.0f : 0.84f);
-    synth.triggerChordDelayed ({ 37 }, baseDelayMs + quarterBeatMs, 0.25f, 44);                               // low percussion tick
-    synth.triggerChordDelayed ({ 50 }, baseDelayMs + halfBeatMs, 0.22f, 22);                                  // muted hat
-    synth.triggerChordDelayed ({ 52 }, baseDelayMs + threeQuarterBeatMs, 0.16f, 18);                          // muted lift
+    synth.triggerChordDelayedSamples ({ 32 }, sampleOffset, isBarDownbeat ? 1.0f : 0.92f, juce::roundToInt (audioSampleRate * (isBarDownbeat ? 0.110 : 0.092)));
+    synth.sidechainPulseDelayedSamples (sampleOffset, isBarDownbeat ? 1.0f : 0.84f);
+    synth.triggerChordDelayedSamples ({ 37 }, sampleOffset + quarterBeatSamples, 0.25f, juce::roundToInt (audioSampleRate * 0.044));
+    synth.triggerChordDelayedSamples ({ 50 }, sampleOffset + halfBeatSamples, 0.22f, juce::roundToInt (audioSampleRate * 0.022));
+    synth.triggerChordDelayedSamples ({ 52 }, sampleOffset + threeQuarterBeatSamples, 0.16f, juce::roundToInt (audioSampleRate * 0.018));
 
     if (beatInBar == 1 || beatInBar == 3)
-        synth.triggerChordDelayed ({ 48 }, baseDelayMs + halfBeatMs, 0.30f, 36);                              // mid accent
+        synth.triggerChordDelayedSamples ({ 48 }, sampleOffset + halfBeatSamples, 0.30f, juce::roundToInt (audioSampleRate * 0.036));
 
     if (isBarDownbeat)
     {
         // Strong bar marker.
-        synth.triggerChordDelayed ({ 27 }, baseDelayMs, 0.88f, 160);
-        synth.sidechainPulseDelayed (baseDelayMs, 0.7f);
-        synth.triggerChordDelayed ({ 45 }, baseDelayMs + halfBeatMs, 0.14f, 24);
+        synth.triggerChordDelayedSamples ({ 27 }, sampleOffset, 0.88f, juce::roundToInt (audioSampleRate * 0.160));
+        synth.sidechainPulseDelayedSamples (sampleOffset, 0.7f);
+        synth.triggerChordDelayedSamples ({ 45 }, sampleOffset + halfBeatSamples, 0.14f, juce::roundToInt (audioSampleRate * 0.024));
     }
 
     if (isPreBarBeat)
-        synth.triggerChordDelayed ({ 47 }, baseDelayMs + halfBeatMs, 0.14f, 18);
+        synth.triggerChordDelayedSamples ({ 47 }, sampleOffset + halfBeatSamples, 0.14f, juce::roundToInt (audioSampleRate * 0.018));
+
+    pendingWorldBeatSteps.fetch_add (1);
+    if (isBarDownbeat)
+        pendingBarPulseSteps.fetch_add (1);
 
     // Melodic content comes from mover collisions/endpoints only.
 }
@@ -912,7 +981,7 @@ void MainComponent::drawHud (juce::Graphics& g) const
     g.setFont (juce::Font (14.0f));
     g.drawText ("Movement: WASD only | Look: mouse move/drag", 16, getHeight() - 112, getWidth() - 24, 20, juce::Justification::left);
     g.drawText ("Placement: N note mode, C chord mode, B place | Chord picker: Up/Down + Enter (opens after chord place)", 16, getHeight() - 92, getWidth() - 24, 20, juce::Justification::left);
-    g.drawText ("Modes: M toggles Build/Performance", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
+    g.drawText ("Modes: M toggles Build/Performance | Synth: T cycles (" + synth.getModelName() + ")", 16, getHeight() - 72, getWidth() - 24, 20, juce::Justification::left);
 
     if (mode == Mode::performance)
     {
@@ -955,6 +1024,9 @@ void MainComponent::drawHud (juce::Graphics& g) const
 
 void MainComponent::updateMovement (float dt)
 {
+    if (mode == Mode::performance)
+        return;
+
     const auto lookFwd = cameraForward().normalised();
 
     // Keep W/S level near horizon; only add vertical travel when look pitch is clearly up/down.

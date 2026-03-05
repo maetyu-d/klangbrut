@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include "World.h"
 #include "SynthEngine.h"
 
@@ -50,7 +51,7 @@ private:
     void openChordMenuForCell (juce::Vector3D<int> cell);
     void closeChordMenu();
     void resetPerformanceState();
-    void performanceBeatStep (int baseDelayMs);
+    void schedulePerformanceBeatAudio (int sampleOffset);
 
     World world;
     SynthEngine synth;
@@ -89,11 +90,18 @@ private:
     juce::Point<float> lastMousePos;
 
     double lastTickMs = 0.0;
+    double audioSampleRate = 44100.0;
     Mode mode = Mode::build;
     double performanceBpm = 128.0;
-    double nextBeatTimeMs = 0.0;
+    double audioBeatPhaseSamples = 0.0;
+    int audioBeatCounter = 0;
+    std::atomic<int> pendingWorldBeatSteps { 0 };
+    std::atomic<int> pendingBarPulseSteps { 0 };
     int beatCount = 0;
     float beatFlash = 0.0f;
     float barFlash = 0.0f;
-    double beatLookaheadMs = 22.0;
+    bool performanceViewLatched = false;
+    juce::Vector3D<float> buildCameraBackup { 10.0f, 3.5f, -2.0f };
+    float buildYawBackup = 0.2f;
+    float buildPitchBackup = -0.1f;
 };

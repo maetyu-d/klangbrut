@@ -9,14 +9,34 @@ public:
     bool appliesToNote (int) override     { return true; }
     bool appliesToChannel (int) override  { return true; }
 };
+
+const char* modelName (PsyVoice::Model m)
+{
+    switch (m)
+    {
+        case PsyVoice::Model::malletBloom: return "Mallet Bloom";
+        case PsyVoice::Model::arcadePulse: return "Arcade Pulse";
+    }
+    return "Mallet Bloom";
+}
+}
+
+PsyVoice::Model PsyVoice::currentModel() const
+{
+    if (modelIndexSource == nullptr)
+        return Model::malletBloom;
+
+    const int v = juce::jlimit (0, 1, modelIndexSource->load());
+    return static_cast<Model> (v);
 }
 
 PsyVoice::PsyVoice()
 {
-    adsrParams.attack = 0.008f;
-    adsrParams.decay = 0.09f;
-    adsrParams.sustain = 0.12f;
-    adsrParams.release = 0.09f;
+    // KlangKunst "Nova Drift"-leaning musical envelope.
+    adsrParams.attack = 0.006f;
+    adsrParams.decay = 0.24f;
+    adsrParams.sustain = 0.38f;
+    adsrParams.release = 0.30f;
     adsr.setParameters (adsrParams);
 }
 
@@ -24,20 +44,37 @@ void PsyVoice::setSampleRate (double sr)
 {
     sampleRate = sr;
     adsr.setSampleRate (sr);
-
-    // Soft one-pole low-pass for more melodic tone.
-    const auto x = std::exp (-2.0 * juce::MathConstants<double>::pi * 2600.0 / sr);
-    toneCoeff = (float) (1.0 - x);
 }
 
 void PsyVoice::startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound*, int)
 {
+    const auto model = currentModel();
     const auto frequency = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
     angleDelta = juce::MathConstants<double>::twoPi * frequency / sampleRate;
-    modDelta = juce::MathConstants<double>::twoPi * (frequency * 1.87) / sampleRate;
-    holdSamples = 0;
-    heldNoise = rng.nextFloat() * 2.0f - 1.0f;
-    tonePrev = 0.0f;
+    if (model == Model::arcadePulse) modDelta = juce::MathConstants<double>::twoPi * (frequency * 4.0) / sampleRate;
+    else                             modDelta = juce::MathConstants<double>::twoPi * (frequency * 1.997) / sampleRate;
+
+    subDelta = juce::MathConstants<double>::twoPi * (frequency * 0.5) / sampleRate;
+    currentAngle = 0.0;
+    modAngle = 0.0;
+    subAngle = 0.0;
+    lpState = 0.0f;
+    hpState = 0.0f;
+    noteAgeSeconds = 0.0f;
+    noiseLP = 0.0f;
+    noiseHP = 0.0f;
+    lastNoise = 0.0f;
+    noiseSeed = static_cast<uint32_t> (0x9E3779B9u ^ (static_cast<uint32_t> (midiNoteNumber) * 2654435761u));
+    chipSfxType = juce::jlimit (0, 3, midiNoteNumber % 4);
+    if (model == Model::malletBloom)
+    {
+        adsrParams.attack = 0.0004f; adsrParams.decay = 0.13f; adsrParams.sustain = 0.0f; adsrParams.release = 0.025f;
+    }
+    else
+    {
+        adsrParams.attack = 0.0001f; adsrParams.decay = 0.075f; adsrParams.sustain = 0.10f; adsrParams.release = 0.045f;
+    }
+    adsr.setParameters (adsrParams);
     level = velocity;
     adsr.noteOn();
 }
@@ -59,26 +96,45 @@ void PsyVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int star
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
+        const auto model = currentModel();
         const auto e = adsr.getNextSample();
-        if (--holdSamples <= 0)
-        {
-            holdSamples = juce::jmax (1, juce::roundToInt ((float) sampleRate * (0.0012f + 0.0016f * rng.nextFloat())));
-            heldNoise = rng.nextFloat() * 2.0f - 1.0f;
-        }
+        noiseSeed = noiseSeed * 1664525u + 1013904223u;
+        const auto white = static_cast<float> ((noiseSeed >> 9) & 0x7FFFFFu) / 4194303.5f * 2.0f - 1.0f;
+        const float transient = std::exp (-noteAgeSeconds * 24.0f);
+        const float click = white * transient * 0.18f;
 
-        const float mod = std::sin ((float) modAngle) * 0.75f + heldNoise * 0.08f;
-        const float osc1 = std::sin ((float) currentAngle + mod);
-        const float osc2 = std::sin ((float) currentAngle * 2.0f + mod * 0.5f);
-        const float raw = osc1 * 0.78f + osc2 * 0.22f + heldNoise * 0.03f;
-        const float shaped = std::tanh (raw * 1.15f);
-        tonePrev += toneCoeff * (shaped - tonePrev);
-        const float v = tonePrev * level * e;
+        float voiced = 0.0f;
+        if (model == Model::malletBloom)
+        {
+            const auto tone = std::sin (currentAngle * 1.97 + 0.4 * std::sin (modAngle));
+            const auto ping = std::sin (currentAngle * 3.9);
+            const auto env2 = std::exp (-noteAgeSeconds * 14.0f);
+            const auto raw = static_cast<float> (0.78 * tone + 0.16 * ping * env2 + 0.06 * click);
+            lpState += 0.32f * (raw - lpState);
+            voiced = std::tanh (lpState * 1.24f) * 0.68f;
+        }
+        else if (model == Model::arcadePulse)
+        {
+            static constexpr float dutySet[4] = { 0.125f, 0.25f, 0.5f, 0.75f };
+            const float phase = (float) (currentAngle / juce::MathConstants<double>::twoPi);
+            const float p = phase - std::floor (phase);
+            const float duty = dutySet[(size_t) juce::jlimit (0, 3, chipSfxType)];
+            const float pulse = (p < duty) ? 1.0f : -1.0f;
+            noiseLP += 0.18f * (white - noiseLP);
+            noiseHP = white - noiseLP;
+            const float raw = 0.86f * pulse + 0.14f * noiseHP * std::exp (-noteAgeSeconds * 18.0f);
+            lpState += 0.24f * (raw - lpState);
+            voiced = std::tanh (lpState * 1.06f) * 0.70f;
+        }
+        const float v = voiced * level * e;
 
         for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
             outputBuffer.addSample (channel, startSample + sample, v);
 
         currentAngle += angleDelta;
         modAngle += modDelta;
+        subAngle += subDelta;
+        noteAgeSeconds += 1.0f / (float) sampleRate;
     }
 
     if (! adsr.isActive())
@@ -97,6 +153,7 @@ void SynthEngine::prepare (double sampleRate, int maximumBlockSize, int numChann
     {
         auto* voice = new PsyVoice();
         voice->setSampleRate (sampleRate);
+        voice->setModelSource (&modelIndex);
         synth.addVoice (voice);
     }
 
@@ -195,47 +252,77 @@ void SynthEngine::triggerImprovisedHarmonyDelayed (const juce::Array<int>& midiN
     if (notes.isEmpty())
         return;
 
-    const float roll = rng.nextFloat();
     const int n = notes.size();
+    ++improvCounter;
 
-    if (n == 1 || roll < 0.72f)
+    // KlangKunst-inspired weighted improv selector (single/chord/arp).
+    const int section = (improvCounter / 16) % 5;
+    const int beatSlot = improvCounter % 4;
+    int singleW = 56, chordW = 30, arpW = 14;
+    switch (section)
     {
-        const int idx = (n > 1 && rng.nextFloat() < 0.62f) ? 0 : rng.nextInt (n);
-        const int main = notes.getUnchecked (idx);
-        triggerChordDelayed ({ main }, delayMs, velocity * 0.95f, durationMs + 70);
+        case 0: singleW = 74; chordW = 22; arpW = 4; break;
+        case 1: singleW = 56; chordW = 30; arpW = 14; break;
+        case 2: singleW = 40; chordW = 35; arpW = 25; break;
+        case 3: singleW = 28; chordW = 48; arpW = 24; break;
+        case 4: singleW = 36; chordW = 24; arpW = 40; break;
+        default: break;
+    }
 
-        if (n > 1 && rng.nextFloat() < 0.18f)
-        {
-            const int ghost = notes.getUnchecked ((idx + 1) % n);
-            triggerChordDelayed ({ ghost }, delayMs + juce::jmax (26, durationMs / 3), velocity * 0.48f, juce::jmax (70, durationMs / 2));
-        }
+    if (beatSlot == 0) { singleW += 10; arpW -= 8; }
+    else if (beatSlot == 3) { singleW -= 10; chordW += 6; arpW += 8; }
+    else if (beatSlot == 1 && section >= 2) { singleW -= 4; arpW += 6; }
+
+    singleW = juce::jmax (5, singleW);
+    chordW = juce::jmax (5, chordW);
+    arpW = juce::jmax (5, arpW);
+    const int totalW = singleW + chordW + arpW;
+    const int pick = (improvCounter * 11 + n * 23 + section * 29) % totalW;
+
+    enum class Style { single, chord, arp };
+    Style style = Style::single;
+    if (pick < singleW) style = Style::single;
+    else if (pick < singleW + chordW) style = Style::chord;
+    else style = Style::arp;
+
+    if (n == 1 || style == Style::single)
+    {
+        const int idx = (n > 1 && rng.nextFloat() < 0.70f) ? 0 : rng.nextInt (n);
+        const int note = notes.getUnchecked (idx);
+        triggerChordDelayed ({ note }, delayMs, velocity * 0.96f, durationMs + 90);
         return;
     }
 
-    if (roll < 0.96f)
+    if (style == Style::chord)
     {
-        const bool up = rng.nextBool();
-        const int maxArpNotes = juce::jmin (2, n);
-        const int stepMs = juce::jlimit (38, 120, durationMs / juce::jmax (1, maxArpNotes));
-        for (int i = 0; i < maxArpNotes; ++i)
-        {
-            const int idx = up ? i : (n - 1 - i);
-            const int note = notes.getUnchecked (idx);
-            const float vel = velocity * (1.0f - 0.10f * (float) i);
-            triggerChordDelayed ({ note }, delayMs + i * stepMs, juce::jmax (0.22f, vel), juce::jmax (90, durationMs + 50 - i * 14));
-        }
-
+        juce::Array<int> chord;
+        chord.add (notes.getUnchecked (0));
+        if (n > 1) chord.add (notes.getUnchecked (1));
+        if (n > 2 && rng.nextFloat() < 0.45f) chord.add (notes.getUnchecked (2));
+        triggerChordDelayed (chord, delayMs, velocity * 0.74f, durationMs + 110);
         return;
     }
 
-    juce::Array<int> thinChord;
-    thinChord.add (notes.getUnchecked (0));
-    if (n > 1)
-        thinChord.add (notes.getUnchecked (juce::jmin (1, n - 1)));
-    triggerChordDelayed (thinChord, delayMs, velocity * 0.72f, durationMs + 80);
+    const bool up = rng.nextBool();
+    const int maxArpNotes = juce::jmin (3, n);
+    const int stepMs = juce::jlimit (36, 110, durationMs / juce::jmax (1, maxArpNotes));
+    for (int i = 0; i < maxArpNotes; ++i)
+    {
+        const int idx = up ? i : (n - 1 - i);
+        const int note = notes.getUnchecked (idx);
+        const float vel = velocity * (1.0f - 0.10f * (float) i);
+        triggerChordDelayed ({ note }, delayMs + i * stepMs, juce::jmax (0.24f, vel), juce::jmax (95, durationMs + 40 - i * 12));
+    }
 }
 
 void SynthEngine::triggerChordDelayed (const juce::Array<int>& midiNotes, int delayMs, float velocity, int durationMs)
+{
+    const int delaySamples = juce::jmax (0, juce::roundToInt ((double) delayMs * sr / 1000.0));
+    const int durationSamples = juce::jmax (1, juce::roundToInt ((double) durationMs * sr / 1000.0));
+    triggerChordDelayedSamples (midiNotes, delaySamples, velocity, durationSamples);
+}
+
+void SynthEngine::triggerChordDelayedSamples (const juce::Array<int>& midiNotes, int delaySamples, float velocity, int durationSamples)
 {
     const juce::ScopedLock sl (lock);
 
@@ -243,10 +330,9 @@ void SynthEngine::triggerChordDelayed (const juce::Array<int>& midiNotes, int de
     while ((int) pending.size() > kMaxPendingEvents)
         pending.pop();
 
-    const int delaySamples = juce::jmax (0, juce::roundToInt ((double) delayMs * sr / 1000.0));
-    const int noteLen = juce::jmax (1, juce::roundToInt ((double) durationMs * sr / 1000.0));
-    const int spread = juce::jmax (1, juce::roundToInt (sr * 0.0045)); // more spread to reduce simultaneous peaks
-    const int noteCount = juce::jmin (2, midiNotes.size()); // hard poly cap per event
+    const int noteLen = juce::jmax (1, durationSamples > 0 ? durationSamples : juce::roundToInt (sr * 0.22));
+    const int spread = juce::jmax (1, juce::roundToInt (sr * 0.0035)); // KlangKunst-like clustered onset
+    const int noteCount = juce::jmin (3, midiNotes.size()); // still capped for stability
     for (int i = 0; i < noteCount; ++i)
     {
         const auto n = juce::jlimit (24, 100, midiNotes.getReference (i));
@@ -264,7 +350,28 @@ void SynthEngine::sidechainPulse (float amount)
 
 void SynthEngine::sidechainPulseDelayed (int delayMs, float amount)
 {
-    const juce::ScopedLock sl (lock);
     const int delaySamples = juce::jmax (0, juce::roundToInt ((double) delayMs * sr / 1000.0));
+    sidechainPulseDelayedSamples (delaySamples, amount);
+}
+
+void SynthEngine::sidechainPulseDelayedSamples (int delaySamples, float amount)
+{
+    const juce::ScopedLock sl (lock);
     pendingPumps.push ({ timeline + delaySamples + 1, juce::jlimit (0.0f, 1.0f, amount) });
+}
+
+void SynthEngine::cycleModel()
+{
+    const int oldValue = modelIndex.load();
+    modelIndex.store ((oldValue + 1) % 2);
+}
+
+SynthEngine::Model SynthEngine::getModel() const
+{
+    return static_cast<Model> (juce::jlimit (0, 1, modelIndex.load()));
+}
+
+juce::String SynthEngine::getModelName() const
+{
+    return modelName (static_cast<PsyVoice::Model> (juce::jlimit (0, 1, modelIndex.load())));
 }
