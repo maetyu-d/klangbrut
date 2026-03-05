@@ -4,7 +4,7 @@
 
 A different version and vision of the [KlangKunst](https://github.com/maetyu-d/klangkunst) prototype from earlier this week. Again part instrument, part toy, part architectural sandbox, but more explicitly Brutalist in the building stage, with Minecraft-like voxel structures and being able to fly around in full 3-D. This time, moving note/chord entities can be spawned on routes, and sound is triggered when entities hit endpoints or collide with each other. Again, height maps to pitch/root note, but chords are implemented differently compared to KlangKunst. 
 
-n.b. Musically, KlangKunst is more developed than this at the moment, and so unless you like Minecraft a lot, I recommend you use that for now. 
+n.b. Musically, KlangKunst is more developed than this at the moment, and so unless you love Minecraft, I recommend you use that for now. 
 
 ## Build
 
