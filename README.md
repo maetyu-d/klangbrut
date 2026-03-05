@@ -1,14 +1,8 @@
 # KlangBrut
 
-C++/JUCE prototype: part instrument, part toy, part Brutalist-ish architectural sandbox.
+![](https://github.com/maetyu-d/klangbrut/blob/main/Screenshot%202026-03-05%20at%2021.11.34.png)
 
-## Concept
-- Minecraft-like voxel structure in a colourful/vibrant style.
-- Fly in full 3D (horizontal + vertical).
-- Place endpoints and draw 3D routes.
-- Spawn moving note/chord entities on routes.
-- Sound is triggered when entities hit endpoints or collide with each other.
-- Height maps to pitch/root note.
+A different version and vision of the KlangKunst prototype from earlier this week. Again part instrument, part toy, part architectural sandbox, but more explicitly Brutalist in the building stage, with Minecraft-like voxel structures and being able to fly around in full 3-D. This time, moving note/chord entities can be spawned on routes, and sound is triggered when entities hit endpoints or collide with each other. Again, height maps to pitch/root note, but chords are implemented differently compared to KlangKunst.
 
 ## Build
 
